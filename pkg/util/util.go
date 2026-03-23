@@ -2,6 +2,7 @@ package util
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	"io/fs"
@@ -228,6 +229,67 @@ func GetProfilesExcludedDir(inputPath string, containerSourceDir string, useCont
 
 // KantraDirEnv is the environment variable that can override the kantra directory
 // (e.g. when the binary is invoked with a different working directory, as in runLocal).
+// StderrFilterPatterns contains substrings to filter from stderr output.
+// Lines containing any of these patterns will be silently dropped.
+var StderrFilterPatterns = []string{
+	"Windows system assumed buffer larger than it is, events have likely been missed",
+}
+
+// FilterStderr reads from r, drops lines matching any pattern in
+// StderrFilterPatterns, and writes the rest to dest. It uses a chunk-based
+// approach to avoid deadlocks when stderr output contains long stretches
+// without newlines (e.g. progress indicators), which would cause a
+// line-oriented scanner to block and fill the pipe buffer.
+func FilterStderr(r *os.File, dest *os.File) {
+	buf := make([]byte, 32*1024)
+	var lineBuf []byte
+	for {
+		n, err := r.Read(buf)
+		if n > 0 {
+			chunk := buf[:n]
+			for len(chunk) > 0 {
+				idx := bytes.IndexByte(chunk, '\n')
+				if idx < 0 {
+					// No newline in remaining chunk; buffer it.
+					lineBuf = append(lineBuf, chunk...)
+					break
+				}
+				// Complete line found.
+				lineBuf = append(lineBuf, chunk[:idx]...)
+				line := string(lineBuf)
+				lineBuf = lineBuf[:0]
+				chunk = chunk[idx+1:]
+				if ShouldFilterLine(line) {
+					continue
+				}
+				if _, werr := dest.WriteString(line + "\n"); werr != nil {
+					return
+				}
+			}
+		}
+		if err != nil {
+			break
+		}
+	}
+	// Flush any remaining partial line.
+	if len(lineBuf) > 0 {
+		line := string(lineBuf)
+		if !ShouldFilterLine(line) {
+			dest.WriteString(line)
+		}
+	}
+}
+
+// ShouldFilterLine returns true if the line matches any stderr filter pattern.
+func ShouldFilterLine(line string) bool {
+	for _, pattern := range StderrFilterPatterns {
+		if strings.Contains(line, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
 const KantraDirEnv = "KANTRA_DIR"
 
 // GetKantraDir returns the directory used for rulesets, jdtls, and static-report.
