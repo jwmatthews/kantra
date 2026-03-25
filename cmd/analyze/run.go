@@ -140,7 +140,11 @@ func (a *analyzeCommand) runAnalysis(ctx context.Context, mode kantraprovider.Ex
 	if err := env.Start(ctx); err != nil {
 		return err
 	}
-	defer env.Stop(ctx)
+	defer func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cleanupCancel()
+		env.Stop(cleanupCtx)
+	}()
 	progressMode.Printf("  ✓ Started providers\n")
 
 	// --- Provider configs + overrides ---
@@ -263,6 +267,10 @@ func (a *analyzeCommand) runAnalysis(ctx context.Context, mode kantraprovider.Ex
 	operationalLog.Info("evaluating rules for violations. see analysis.log for more info")
 	rulesets := anlzr.Run()
 	operationalLog.Info("[TIMING] Rule execution complete", "duration_ms", time.Since(startRuleExecution).Milliseconds())
+
+	if ctx.Err() != nil {
+		return fmt.Errorf("analysis cancelled: %w", ctx.Err())
+	}
 
 	// Get dependencies
 	operationalLog.Info("resolving dependencies")
