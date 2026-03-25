@@ -73,7 +73,7 @@ We found and fixed hang paths at three distinct phases:
 | 6 | analyzer-lsp | `provider/grpc/service_client.go:206` | 5s timeout on gRPC Stop call | Cleanup doesn't hang on unresponsive provider |
 | 7 | analyzer-lsp | `provider/grpc/provider.go:172`, `provider/lib/lib.go`, `core/types.go`, `cmd/dep/main.go` | Thread `context.Context` through `GetProviderClient` → `NewGRPCClient` | Provider startup respects signal cancellation |
 | 8 | analyzer-lsp | `provider/grpc/provider.go:266-282` | Rewrite `checkServicesRunning` to accept context, fix broken timeout | Service check loop can be interrupted by cancellation |
-| 9 | kantra | `cmd/analyze/analyze.go:126-137` | Print "Interrupt received" on first Ctrl-C, force-exit on second Ctrl-C | Immediate user feedback + escape hatch for slow cleanup |
+| 9 | kantra | `cmd/analyze/analyze.go:126-150` | Dedicated signal channel for interrupt feedback + force-exit on second Ctrl-C | Immediate user feedback + escape hatch for slow cleanup. Uses `signal.Notify` on a separate channel (not `ctx.Done()`) so normal context cancellation on clean exit does not trigger misleading output or leak signal state. Goroutine exits cleanly via `analysisDone` channel on normal shutdown. |
 
 ## Context Chain (after fixes)
 
@@ -119,7 +119,7 @@ All 9 changes are implemented. All tests pass:
 
 ### Manual testing observations
 
-- **Ctrl-C during rule processing:** Now exits with ~10s delay (down from permanent hang). The delay is from workers draining in-flight gRPC Evaluate calls plus up to 5s provider Stop timeout (change 6). Change 9 prints "Interrupt received, shutting down..." immediately so the user knows the signal was received, and a second Ctrl-C force-exits instantly.
+- **Ctrl-C during rule processing:** Now exits with ~10s delay (down from permanent hang). The delay is from workers draining in-flight gRPC Evaluate calls plus up to 5s provider Stop timeout (change 6). Change 9 uses a dedicated signal channel (not `ctx.Done()`) to print "Interrupt received, shutting down..." only on a real SIGINT, and a second Ctrl-C force-exits instantly. On normal exit, the goroutine exits cleanly via an `analysisDone` channel without printing anything.
 - **Ctrl-C during early provider startup:** Previously ignored entirely. Changes 7+8 address this. Change 7 threads the signal context into `NewGRPCClient`. Change 8 fixes `checkServicesRunning` — an infinite retry loop that polled for gRPC services with no context and a broken 30s timeout (timer reset every loop iteration, `default` case always won over `time.After`). Now accepts context and checks `ctx.Done()`. Needs manual verification after rebuild.
 - **Ctrl-C during provider prepare:** Previously hung for up to 8 minutes. Changes 5a/5b address this — needs manual verification.
 

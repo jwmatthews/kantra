@@ -126,17 +126,31 @@ func NewAnalyzeCmd(log logr.Logger) *cobra.Command {
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 			defer stop()
 
-			// Immediate feedback on Ctrl-C, force-exit on second Ctrl-C
+			// Immediate feedback on real Ctrl-C, force-exit on second Ctrl-C.
+			// Uses a dedicated signal channel so normal context cancellation
+			// (e.g. deferred stop()) does not trigger misleading output.
+			analysisDone := make(chan struct{})
 			go func() {
-				<-ctx.Done()
-				fmt.Fprintf(os.Stderr, "\nInterrupt received, shutting down...\n")
-				stop() // restore default signal handling
-				sigCh := make(chan os.Signal, 1)
+				sigCh := make(chan os.Signal, 2)
 				signal.Notify(sigCh, os.Interrupt)
-				<-sigCh
-				fmt.Fprintf(os.Stderr, "Force exiting...\n")
-				os.Exit(1)
+				defer signal.Stop(sigCh)
+
+				select {
+				case <-sigCh:
+					fmt.Fprintf(os.Stderr, "\nInterrupt received, shutting down...\n")
+				case <-analysisDone:
+					return
+				}
+
+				select {
+				case <-sigCh:
+					fmt.Fprintf(os.Stderr, "Force exiting...\n")
+					os.Exit(1)
+				case <-analysisDone:
+					return
+				}
 			}()
+			defer close(analysisDone)
 
 			if analyzeCmd.listProviders {
 				analyzeCmd.ListAllProviders()
