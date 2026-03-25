@@ -28,12 +28,12 @@ We found and fixed hang paths at three distinct phases:
 **Symptom:** Ctrl-C during "Preparing provider" phase hangs for up to 8 minutes.
 
 **Root causes:**
-1. `abConfigChan` in `ProviderStart()` (`core/analyzer.go:144`) is unbuffered. Init goroutines send on it (line 182), but if the collector goroutine has exited via `ctx.Done()`, the send blocks forever and the waitGroup never drains.
+1. `abConfigChan` in `ProviderStart()` (`core/analyzer.go:144`) is unbuffered. Init goroutines send on it (line 182), but if the collector goroutine has exited via `ctx.Done()`, the send blocks forever and the waitGroup never drains. Fixed by wrapping the send in a `select` with `providerInitCtx.Done()` and moving `waitGroup.Done()` to the sender side (after the select) so it always runs regardless of cancellation.
 2. The init wait select (lines 204-215) has no `ctx.Done()` case — it only checks `<-c` (all providers done) and `time.After(timeout)`. Cancellation is not detected until the 8-minute default timeout expires.
 3. `grpcServiceClient.Stop()` (`provider/grpc/service_client.go:206`) uses `context.TODO()` for the gRPC Stop call. During cleanup after cancellation, this can hang indefinitely if the provider is unresponsive.
 
 **Fixes:**
-- Change 5a: Buffer `abConfigChan` to `len(a.providers)`
+- Change 5a: Wrap `abConfigChan` send in `select` with `providerInitCtx.Done()`, move `waitGroup.Done()` to sender
 - Change 5b: Add `a.ctx.Done()` case to the init wait select
 - Change 6: Use `context.WithTimeout(context.Background(), 5*time.Second)` in `grpcServiceClient.Stop()`
 
@@ -68,7 +68,7 @@ We found and fixed hang paths at three distinct phases:
 | 2 | analyzer-lsp | `engine/engine.go:355-364` | `select` with `ctx.Done()` in dispatch loop | Dispatch loop can exit on cancellation |
 | 3 | kantra | `cmd/analyze/run.go` (after `anlzr.Run()`) | Check `ctx.Err()`, return error | Skip post-analysis work after cancel |
 | 4 | kantra | `cmd/analyze/run.go:143` | Fresh 30s timeout context for `env.Stop()` | Cleanup works with cancelled signal context |
-| 5a | analyzer-lsp | `core/analyzer.go:144` | Buffer `abConfigChan` to `len(a.providers)` | Init goroutines don't block on cancelled collector |
+| 5a | analyzer-lsp | `core/analyzer.go:144,181-185` | Wrap `abConfigChan` send in `select` with `providerInitCtx.Done()`; move `waitGroup.Done()` to sender | Init goroutines don't block on cancelled collector; channel stays unbuffered (more idiomatic Go) |
 | 5b | analyzer-lsp | `core/analyzer.go:204-215` | Add `a.ctx.Done()` to init wait select | Cancellation detected immediately, not after 8min timeout |
 | 6 | analyzer-lsp | `provider/grpc/service_client.go:206` | 5s timeout on gRPC Stop call | Cleanup doesn't hang on unresponsive provider |
 | 7 | analyzer-lsp | `provider/grpc/provider.go:172`, `provider/lib/lib.go`, `core/types.go`, `cmd/dep/main.go` | Thread `context.Context` through `GetProviderClient` → `NewGRPCClient` | Provider startup respects signal cancellation |
@@ -88,7 +88,7 @@ signal.NotifyContext(context.Background(), os.Interrupt)     ← analyze.go:126
           │           └─ checkServicesRunning(ctx, ...)        ← provider.go [NEW: Change 8]
           ├─ startable.Start(ctx)                             ← types.go:124
           ├─ ProviderStart()  uses a.ctx                      ← analyzer.go:129
-          │   ├─ abConfigChan buffered [NEW: Change 5a]
+          │   ├─ abConfigChan send: select { case <-providerInitCtx.Done() } [NEW: Change 5a]
           │   └─ select { case <-a.ctx.Done() } [NEW: Change 5b]
           └─ CreateRuleEngine(ctx, ...)                       ← types.go:148
               └─ context.WithCancel(ctx)                       ← engine.go:141
