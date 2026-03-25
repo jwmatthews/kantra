@@ -126,6 +126,18 @@ func NewAnalyzeCmd(log logr.Logger) *cobra.Command {
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 			defer stop()
 
+			// Immediate feedback on Ctrl-C, force-exit on second Ctrl-C
+			go func() {
+				<-ctx.Done()
+				fmt.Fprintf(os.Stderr, "\nInterrupt received, shutting down...\n")
+				stop() // restore default signal handling
+				sigCh := make(chan os.Signal, 1)
+				signal.Notify(sigCh, os.Interrupt)
+				<-sigCh
+				fmt.Fprintf(os.Stderr, "Force exiting...\n")
+				os.Exit(1)
+			}()
+
 			if analyzeCmd.listProviders {
 				analyzeCmd.ListAllProviders()
 				return nil
