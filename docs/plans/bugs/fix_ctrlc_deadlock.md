@@ -1,4 +1,5 @@
 # Fix Ctrl-C Deadlock During Analysis (Issue #776)
+* https://github.com/konveyor/kantra/issues/776
 
 ## Problem
 
@@ -121,12 +122,6 @@ All 9 changes are implemented. All tests pass:
 - **Ctrl-C during rule processing:** Now exits with ~10s delay (down from permanent hang). The delay is from workers draining in-flight gRPC Evaluate calls plus up to 5s provider Stop timeout (change 6). Change 9 prints "Interrupt received, shutting down..." immediately so the user knows the signal was received, and a second Ctrl-C force-exits instantly.
 - **Ctrl-C during early provider startup:** Previously ignored entirely. Changes 7+8 address this. Change 7 threads the signal context into `NewGRPCClient`. Change 8 fixes `checkServicesRunning` — an infinite retry loop that polled for gRPC services with no context and a broken 30s timeout (timer reset every loop iteration, `default` case always won over `time.After`). Now accepts context and checks `ctx.Done()`. Needs manual verification after rebuild.
 - **Ctrl-C during provider prepare:** Previously hung for up to 8 minutes. Changes 5a/5b address this — needs manual verification.
-
-### Remaining work
-
-1. **Manual verification needed:** Rebuild kantra with local analyzer-lsp replace and test Ctrl-C at each phase (early startup, prepare, rule processing).
-2. **Investigate 10s delay:** The remaining delay during rule processing exit may be from in-flight gRPC Evaluate calls not responding to context cancellation promptly, plus the 5s Stop timeout. Check if this is acceptable.
-3. **Remove go.mod replace:** Before committing kantra, the `go mod edit -replace` directive pointing at `../analyzer-lsp` must be removed and replaced with a proper version after analyzer-lsp changes are merged.
 
 ## Local Development Setup
 
