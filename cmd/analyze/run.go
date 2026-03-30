@@ -141,6 +141,8 @@ func (a *analyzeCommand) runAnalysis(ctx context.Context, mode kantraprovider.Ex
 		return err
 	}
 	defer func() {
+		// Fresh context for cleanup so a potentially cancelled signal context
+		// doesn't prevent container stop/remove/volume cleanup.
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cleanupCancel()
 		env.Stop(cleanupCtx)

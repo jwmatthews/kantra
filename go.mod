@@ -140,3 +140,5 @@ require (
 	github.com/sirupsen/logrus v1.9.4
 	github.com/spf13/pflag v1.0.7 // indirect
 )
+
+replace github.com/konveyor/analyzer-lsp => ../analyzer-lsp

@@ -123,7 +123,8 @@ func NewAnalyzeCmd(log logr.Logger) *cobra.Command {
 			if val, err := cmd.Flags().GetBool("no-cleanup"); err == nil {
 				analyzeCmd.cleanup = !val
 			}
-			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+			// JWM:  Assuming that it's a little better to use cmd.Context() here than context.Background()
+			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt)
 			defer stop()
 
 			// Immediate feedback on real Ctrl-C, force-exit on second Ctrl-C.
@@ -173,7 +174,7 @@ func NewAnalyzeCmd(log logr.Logger) *cobra.Command {
 					return nil
 				}
 				// list sources/targets in container mode
-				err := analyzeCmd.ListLabels(cmd.Context())
+				err := analyzeCmd.ListLabels(ctx)
 				if err != nil {
 					log.Error(err, "failed to list rule labels")
 					return err
@@ -257,6 +258,11 @@ func NewAnalyzeCmd(log logr.Logger) *cobra.Command {
 			log.V(1).Info("running analysis", "mode", mode, "providers", foundProviders)
 
 			// Run unified analysis pipeline
+			//
+			// JWM:  Question, should we consider removing the below cmdCtx and just use ctx directly?
+			// I don't see cancelFunc used other than being invoked when this function is complete
+			// Is there a reason we can't just use ctx directly?
+			//
 			cmdCtx, cancelFunc := context.WithCancel(ctx)
 			defer cancelFunc()
 			err = analyzeCmd.runAnalysis(cmdCtx, mode, foundProviders)
